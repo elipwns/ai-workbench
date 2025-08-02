@@ -12,16 +12,16 @@ def main():
     analyzer = SentimentAnalyzer()
     
     print("Downloading raw data from S3...")
-    raw_data = s3_manager.download_raw_data()
+    raw_df = s3_manager.download_raw_data()
     
-    if not raw_data:
+    if raw_df.empty:
         print("No raw data found!")
         return
     
-    print(f"Processing {len(raw_data)} raw data files...")
+    print(f"Processing {len(raw_df)} raw data records...")
     
     # Clean the data
-    df = cleaner.process_scraped_data(raw_data)
+    df = cleaner.process_dataframe(raw_df)
     print(f"Cleaned data: {len(df)} records")
     
     # Analyze sentiment

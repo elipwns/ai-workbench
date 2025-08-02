@@ -37,3 +37,17 @@ class DataCleaner:
         df = df[df['content'].str.len() > 50]  # Filter out very short content
         
         return df
+    
+    def process_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Clean DataFrame with Reddit data"""
+        # Combine title and content for sentiment analysis
+        df['content'] = df.apply(lambda row: 
+            self.clean_text(f"{row.get('title', '')} {row.get('content', '')}".strip()), 
+            axis=1
+        )
+        
+        # Remove duplicates and empty content
+        df = df.drop_duplicates(subset=['id'])
+        df = df[df['content'].str.len() > 10]  # Filter out very short content
+        
+        return df
