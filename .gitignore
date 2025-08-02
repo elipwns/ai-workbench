@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+models/saved_models/
+data/downloads/
+test_*.py
+*.log
+.pytest_cache/
+.coverage
