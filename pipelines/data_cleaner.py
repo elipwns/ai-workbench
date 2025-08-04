@@ -39,15 +39,21 @@ class DataCleaner:
         return df
     
     def process_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Clean DataFrame with Reddit data"""
-        # Combine title and content for sentiment analysis
-        df['content'] = df.apply(lambda row: 
-            self.clean_text(f"{row.get('title', '')} {row.get('content', '')}".strip()), 
-            axis=1
-        )
+        """Clean DataFrame with Reddit or Bluesky data"""
+        # Handle different data sources based on platform field
+        def create_content(row):
+            if row.get('platform') == 'bluesky':
+                # Bluesky data - use text field directly
+                return self.clean_text(str(row.get('text', '')))
+            else:
+                # Reddit data - combine title and content
+                return self.clean_text(f"{row.get('title', '')} {row.get('content', '')}".strip())
+        
+        df['content'] = df.apply(create_content, axis=1)
         
         # Remove duplicates and empty content
-        df = df.drop_duplicates(subset=['id'])
+        if 'id' in df.columns:
+            df = df.drop_duplicates(subset=['id'])
         df = df[df['content'].str.len() > 10]  # Filter out very short content
         
         return df
