@@ -5,11 +5,11 @@ from typing import List
 
 class SentimentAnalyzer:
     def __init__(self):
-        # Force CPU until RTX 5090 is officially supported
+        # Using CPU for sentiment analysis (RTX 5090 not yet supported by PyTorch)
         device = -1
-        print(f"Using device: CPU (RTX 5090 not yet supported)")
+        print(f"Using device: CPU")
         
-        # Use financial sentiment model
+        # Use financial sentiment model (FinBERT would be better but requires more setup)
         self.classifier = pipeline(
             "sentiment-analysis",
             model="nlptown/bert-base-multilingual-uncased-sentiment",

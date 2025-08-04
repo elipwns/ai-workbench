@@ -7,7 +7,7 @@ import os
 class S3DataManager:
     def __init__(self):
         self.s3_client = boto3.client('s3')
-        self.bucket_name = os.getenv('S3_BUCKET_NAME')
+        self.bucket_name = os.getenv('S3_BUCKET_NAME', 'automated-trading-data-bucket')
     
     def download_raw_data(self, prefix='raw-data/') -> pd.DataFrame:
         """Download all raw data from S3 and return as DataFrame"""
@@ -19,23 +19,22 @@ class S3DataManager:
         all_data = []
         for obj in objects.get('Contents', []):
             key = obj['Key']
+            
+            # Only process Reddit, Bluesky, and price data files
+            if not (key.endswith('.csv') and 
+                   ('reddit_financial_' in key or 'bluesky_financial_' in key or 'price_data_' in key)):
+                continue
+                
             response = self.s3_client.get_object(
                 Bucket=self.bucket_name, 
                 Key=key
             )
             
-            # Handle both CSV and JSON files
+            # Handle CSV files
             if key.endswith('.csv'):
                 from io import StringIO
                 csv_content = response['Body'].read().decode('utf-8')
                 df = pd.read_csv(StringIO(csv_content))
-                all_data.append(df)
-            elif key.endswith('.json'):
-                content = json.loads(response['Body'].read())
-                if isinstance(content, list):
-                    df = pd.DataFrame(content)
-                else:
-                    df = pd.DataFrame([content])
                 all_data.append(df)
         
         if all_data:
