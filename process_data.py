@@ -1,6 +1,6 @@
 from data.s3_manager import S3DataManager
 from pipelines.data_cleaner import DataCleaner
-from models.sentiment_analyzer import SentimentAnalyzer
+from models.finbert_analyzer import FinBERTAnalyzer
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -9,7 +9,7 @@ def main():
     # Initialize components
     s3_manager = S3DataManager()
     cleaner = DataCleaner()
-    analyzer = SentimentAnalyzer()
+    analyzer = FinBERTAnalyzer()
     
     print("Downloading raw data from S3...")
     raw_df = s3_manager.download_raw_data()
