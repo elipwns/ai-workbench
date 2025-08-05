@@ -44,10 +44,19 @@ class DataCleaner:
         def create_content(row):
             if row.get('platform') == 'bluesky':
                 # Bluesky data - use text field directly
-                return self.clean_text(str(row.get('text', '')))
+                text = row.get('text', '')
+                if pd.isna(text):
+                    text = ''
+                return self.clean_text(str(text))
             else:
                 # Reddit data - combine title and content
-                return self.clean_text(f"{row.get('title', '')} {row.get('content', '')}".strip())
+                title = row.get('title', '')
+                content = row.get('content', '')
+                if pd.isna(title):
+                    title = ''
+                if pd.isna(content):
+                    content = ''
+                return self.clean_text(f"{title} {content}".strip())
         
         df['content'] = df.apply(create_content, axis=1)
         

@@ -202,9 +202,8 @@ if __name__ == "__main__":
     
     predictor = PricePredictor()
     
-    # Train models for BTC and ETH
-    for symbol in ['BTC', 'ETH']:
-        try:
-            predictor.train_models(symbol)
-        except Exception as e:
-            print(f"Error training {symbol}: {e}")
+    # Train models for BTC only
+    try:
+        predictor.train_models('BTC')
+    except Exception as e:
+        print(f"Error training BTC: {e}")
