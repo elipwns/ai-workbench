@@ -346,8 +346,22 @@ class MonthlyPredictor:
         for symbol in symbols:
             prediction = self.generate_monthly_prediction(symbol)
             if prediction:
-                history['predictions'].append(prediction)
-                print(f"Prediction {symbol} next month: ${prediction['predicted_price']:.0f} (+/-{prediction['confidence_band']*100:.0f}%)")
+                # Check if prediction already exists for this symbol and target month
+                existing_prediction = None
+                for i, existing in enumerate(history['predictions']):
+                    if (existing['symbol'] == prediction['symbol'] and 
+                        existing['target_month'] == prediction['target_month']):
+                        existing_prediction = i
+                        break
+                
+                if existing_prediction is not None:
+                    # Update existing prediction
+                    history['predictions'][existing_prediction] = prediction
+                    print(f"Updated prediction {symbol} next month: ${prediction['predicted_price']:.0f} (+/-{prediction['confidence_band']*100:.0f}%)")
+                else:
+                    # Add new prediction
+                    history['predictions'].append(prediction)
+                    print(f"New prediction {symbol} next month: ${prediction['predicted_price']:.0f} (+/-{prediction['confidence_band']*100:.0f}%)")
         
         # Save updated history
         self.save_predictions_history(history)
