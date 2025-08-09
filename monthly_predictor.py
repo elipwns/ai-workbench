@@ -20,6 +20,34 @@ class MonthlyPredictor:
     def __init__(self):
         self.s3_manager = S3DataManager()
         self.predictions_file = "monthly_predictions.json"
+    
+    def get_community_sentiment(self, symbol):
+        """Get community voting sentiment for a symbol"""
+        try:
+            # Try different vote categories for the symbol
+            categories = ['ipo', 'general', 'crypto', 'stocks']
+            
+            for category in categories:
+                try:
+                    key = f"votes/{category}_{symbol}.json"
+                    response = self.s3_manager.s3_client.get_object(
+                        Bucket=self.s3_manager.bucket_name,
+                        Key=key
+                    )
+                    votes_data = json.loads(response['Body'].read().decode('utf-8'))
+                    
+                    total_votes = votes_data['bullish'] + votes_data['bearish']
+                    if total_votes >= 3:  # Need at least 3 votes for reliability
+                        community_sentiment = votes_data['bullish'] / total_votes
+                        print(f"Community sentiment for {symbol}: {community_sentiment:.2f} ({total_votes} votes)")
+                        return community_sentiment, total_votes
+                except:
+                    continue
+            
+            return None, 0
+            
+        except Exception as e:
+            return None, 0
         
     def load_predictions_history(self):
         """Load historical predictions from S3"""
@@ -134,6 +162,9 @@ class MonthlyPredictor:
             if not current_price:
                 return None, None
             
+            # Get community sentiment
+            community_sentiment, vote_count = self.get_community_sentiment(symbol)
+            
             # Enhanced feature vector
             features = {
                 'sentiment_mean': latest.get('sentiment_mean', 3.0),
@@ -142,7 +173,9 @@ class MonthlyPredictor:
                 'macd': latest.get('macd', 0),
                 'bb_position': latest.get('bb_position', 0.5),
                 'volume_ratio': latest.get('volume_ratio', 1.0),
-                'price_change_7d': latest.get('price_change_7d', 0)
+                'price_change_7d': latest.get('price_change_7d', 0),
+                'community_sentiment': community_sentiment if community_sentiment else 0.5,
+                'community_votes': vote_count
             }
             
             # Enhanced prediction logic
@@ -163,11 +196,19 @@ class MonthlyPredictor:
             # Price momentum
             momentum_factor = 0 if pd.isna(features['price_change_7d']) else features['price_change_7d'] * 0.1
             
+            # Community sentiment factor (if available)
+            community_factor = 0
+            if features['community_votes'] >= 3:
+                # Convert 0-1 sentiment to -0.05 to +0.05 factor
+                community_factor = (features['community_sentiment'] - 0.5) * 0.1
+                print(f"Community factor: {community_factor:.3f} (from {features['community_votes']} votes)")
+            
             # Combined prediction
             total_factor = (
-                sentiment_factor + sentiment_momentum +  # 60% weight
-                rsi_factor + macd_factor + bb_factor +   # 30% weight  
-                volume_factor + momentum_factor * 0.5    # 10% weight
+                sentiment_factor + sentiment_momentum +  # 50% weight
+                rsi_factor + macd_factor + bb_factor +   # 25% weight  
+                volume_factor + momentum_factor * 0.5 +  # 15% weight
+                community_factor                         # 10% weight
             )
             
             prediction = base_prediction * (1 + total_factor)
@@ -214,12 +255,21 @@ class MonthlyPredictor:
                 
                 features = np.array([[recent_sentiment, sentiment_trend, current_price]])
                 
+                # Get community sentiment
+                community_sentiment, vote_count = self.get_community_sentiment(symbol)
+                
                 # Simple model: assume some correlation between sentiment and price
                 base_prediction = current_price
                 sentiment_factor = (recent_sentiment - 3) * 0.05  # 5% per sentiment point above/below neutral
                 trend_factor = sentiment_trend * 0.1
                 
-                prediction = base_prediction * (1 + sentiment_factor + trend_factor)
+                # Community factor (if available)
+                community_factor = 0
+                if vote_count >= 3:
+                    community_factor = (community_sentiment - 0.5) * 0.08  # 8% max impact
+                    print(f"Community sentiment: {community_sentiment:.2f} ({vote_count} votes)")
+                
+                prediction = base_prediction * (1 + sentiment_factor + trend_factor + community_factor)
                 confidence = 0.08  # 8% confidence band - tight for clear evaluation
                 
                 return prediction, confidence
@@ -371,4 +421,6 @@ class MonthlyPredictor:
 
 if __name__ == "__main__":
     predictor = MonthlyPredictor()
-    predictor.run_monthly_prediction_cycle(['BTC'])
+    # Add more symbols once BTC model is validated
+    symbols = ['BTC']  # Ready to expand: ['BTC', 'ETH', 'TSLA', 'SPY']
+    predictor.run_monthly_prediction_cycle(symbols)
