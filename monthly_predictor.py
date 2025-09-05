@@ -225,8 +225,45 @@ class MonthlyPredictor:
             print(f"Error in ML model: {e}")
             return None, None
     
+    def get_model_performance_feedback(self, symbol='BTC'):
+        """Get feedback from past model performance to adjust future predictions"""
+        history = self.load_predictions_history()
+        performance_data = history.get('performance', [])
+        
+        if not performance_data:
+            return 0, 1.0  # No adjustment, normal confidence
+        
+        # Get recent performance for this symbol
+        symbol_performance = [p for p in performance_data if p['symbol'] == symbol]
+        if not symbol_performance:
+            return 0, 1.0
+        
+        # Calculate recent accuracy (last 3 predictions)
+        recent_performance = symbol_performance[-3:]
+        
+        # Calculate average error and success rate
+        avg_error = sum(p['error_pct'] for p in recent_performance) / len(recent_performance)
+        success_rate = sum(1 for p in recent_performance if p['rating'] in ['Excellent', 'Good']) / len(recent_performance)
+        
+        # Adjust prediction confidence based on past performance
+        if avg_error < 5 and success_rate > 0.6:
+            confidence_multiplier = 0.8  # More confident, tighter bands
+            bias_adjustment = 0  # No bias adjustment for good performance
+        elif avg_error > 15 or success_rate < 0.3:
+            confidence_multiplier = 1.5  # Less confident, wider bands
+            # Check for systematic bias
+            recent_errors = [(p['predicted_price'] - p['actual_price']) / p['actual_price'] for p in recent_performance]
+            avg_bias = sum(recent_errors) / len(recent_errors)
+            bias_adjustment = -avg_bias * 0.5  # Correct for systematic over/under prediction
+        else:
+            confidence_multiplier = 1.0
+            bias_adjustment = 0
+        
+        print(f"Performance feedback: avg_error={avg_error:.1f}%, success_rate={success_rate:.1f}, confidence_mult={confidence_multiplier:.1f}, bias_adj={bias_adjustment:.3f}")
+        return bias_adjustment, confidence_multiplier
+    
     def create_simple_model(self, symbol='BTC'):
-        """Create simple prediction model based on available data"""
+        """Create simple prediction model with performance feedback"""
         try:
             # Load recent sentiment and price data
             processed_df = self.s3_manager.download_raw_data()
@@ -253,10 +290,11 @@ class MonthlyPredictor:
                 recent_sentiment = daily_sentiment.tail(7).mean()  # Last week average
                 sentiment_trend = daily_sentiment.tail(3).mean() - daily_sentiment.tail(7).mean()
                 
-                features = np.array([[recent_sentiment, sentiment_trend, current_price]])
-                
                 # Get community sentiment
                 community_sentiment, vote_count = self.get_community_sentiment(symbol)
+                
+                # Get performance feedback
+                bias_adjustment, confidence_multiplier = self.get_model_performance_feedback(symbol)
                 
                 # Simple model: assume some correlation between sentiment and price
                 base_prediction = current_price
@@ -269,8 +307,11 @@ class MonthlyPredictor:
                     community_factor = (community_sentiment - 0.5) * 0.08  # 8% max impact
                     print(f"Community sentiment: {community_sentiment:.2f} ({vote_count} votes)")
                 
-                prediction = base_prediction * (1 + sentiment_factor + trend_factor + community_factor)
-                confidence = 0.08  # 8% confidence band - tight for clear evaluation
+                # Apply bias adjustment from past performance
+                total_factor = sentiment_factor + trend_factor + community_factor + bias_adjustment
+                
+                prediction = base_prediction * (1 + total_factor)
+                confidence = 0.08 * confidence_multiplier  # Adjust confidence based on past performance
                 
                 return prediction, confidence
             
@@ -321,40 +362,107 @@ class MonthlyPredictor:
         
         return prediction
     
+    def get_historical_price_for_month(self, symbol, target_month):
+        """Get the actual price at the end of the target month from historical data"""
+        try:
+            # Load all price data
+            objects = self.s3_manager.s3_client.list_objects_v2(
+                Bucket=self.s3_manager.bucket_name,
+                Prefix="raw-data/price_data_"
+            )
+            
+            if not objects.get('Contents'):
+                return None
+            
+            all_price_data = []
+            for obj in objects['Contents']:
+                response = self.s3_manager.s3_client.get_object(
+                    Bucket=self.s3_manager.bucket_name,
+                    Key=obj['Key']
+                )
+                
+                from io import StringIO
+                csv_content = response['Body'].read().decode('utf-8')
+                df = pd.read_csv(StringIO(csv_content))
+                all_price_data.append(df)
+            
+            if not all_price_data:
+                return None
+            
+            # Combine all price data
+            combined_df = pd.concat(all_price_data, ignore_index=True)
+            combined_df['timestamp'] = pd.to_datetime(combined_df['timestamp'])
+            
+            # Filter for the symbol and target month
+            symbol_data = combined_df[combined_df['symbol'] == symbol]
+            if symbol_data.empty:
+                return None
+            
+            # Get data from the target month
+            target_year, target_month_num = map(int, target_month.split('-'))
+            month_data = symbol_data[
+                (symbol_data['timestamp'].dt.year == target_year) & 
+                (symbol_data['timestamp'].dt.month == target_month_num)
+            ]
+            
+            if month_data.empty:
+                print(f"No price data found for {symbol} in {target_month}")
+                return None
+            
+            # Return the last price from that month
+            last_price = month_data.sort_values('timestamp').iloc[-1]['price']
+            print(f"Found historical price for {symbol} in {target_month}: ${last_price:.0f}")
+            return float(last_price)
+            
+        except Exception as e:
+            print(f"Error getting historical price: {e}")
+            return None
+    
     def evaluate_last_month_prediction(self, symbol='BTC'):
-        """Evaluate how last month's prediction performed"""
+        """Evaluate how last month's prediction performed using historical data"""
         history = self.load_predictions_history()
         
         if not history['predictions']:
             return None
         
-        # Find last month's prediction
+        # Find last month's prediction (the month that just ended)
         last_month = datetime.now().replace(day=1) - timedelta(days=1)
         target_month = last_month.strftime('%Y-%m')
         
+        # Find the most recent prediction for that target month
         last_prediction = None
-        for pred in history['predictions']:
+        for pred in reversed(history['predictions']):  # Start from most recent
             if pred['symbol'] == symbol and pred['target_month'] == target_month:
                 last_prediction = pred
                 break
         
         if not last_prediction:
+            print(f"No prediction found for {symbol} in {target_month}")
             return None
         
-        # Get actual price for that month
-        current_price = self.get_current_price(symbol)
-        if not current_price:
+        # Check if we already evaluated this prediction
+        for perf in history['performance']:
+            if (perf['symbol'] == symbol and 
+                perf['target_month'] == target_month and
+                perf.get('prediction_date') == last_prediction['prediction_date']):
+                print(f"Already evaluated {symbol} for {target_month}")
+                return None
+        
+        # Get actual price from historical data for that month
+        actual_price = self.get_historical_price_for_month(symbol, target_month)
+        if not actual_price:
+            print(f"Could not get historical price for {symbol} in {target_month}")
             return None
         
         # Calculate performance metrics
         predicted = last_prediction['predicted_price']
-        actual = current_price
+        actual = actual_price
         error_pct = abs((predicted - actual) / actual) * 100
         
         # Check if actual price was within confidence band
         within_band = (last_prediction['lower_band'] <= actual <= last_prediction['upper_band'])
         
-        # Assign performance rating (stricter for tighter bands)
+        # Assign performance rating
         if within_band and error_pct < 3:
             rating = 'Excellent'
         elif within_band and error_pct < 6:
@@ -369,12 +477,14 @@ class MonthlyPredictor:
         performance = {
             'symbol': symbol,
             'target_month': target_month,
+            'prediction_date': last_prediction['prediction_date'],  # Track which prediction this evaluates
             'predicted_price': predicted,
             'actual_price': actual,
             'error_pct': error_pct,
             'within_confidence_band': within_band,
             'rating': rating,
-            'evaluation_date': datetime.now().isoformat()
+            'evaluation_date': datetime.now().isoformat(),
+            'model_version': last_prediction.get('model_version', 'unknown')
         }
         
         return performance
@@ -392,26 +502,25 @@ class MonthlyPredictor:
                 history['performance'].append(performance)
                 print(f"✅ {symbol} last month: {performance['rating']} ({performance['error_pct']:.1f}% error)")
         
-        # Generate new predictions for next month
+        # Generate new predictions for next month (only if none exists)
         for symbol in symbols:
+            # Check if we already have a prediction for next month
+            next_month = (datetime.now().replace(day=1) + timedelta(days=32)).strftime('%Y-%m')
+            existing_prediction = None
+            for pred in history['predictions']:
+                if pred['symbol'] == symbol and pred['target_month'] == next_month:
+                    existing_prediction = pred
+                    break
+            
+            if existing_prediction:
+                print(f"Prediction already exists for {symbol} {next_month}: ${existing_prediction['predicted_price']:.0f}")
+                continue
+            
+            # Generate new prediction
             prediction = self.generate_monthly_prediction(symbol)
             if prediction:
-                # Check if prediction already exists for this symbol and target month
-                existing_prediction = None
-                for i, existing in enumerate(history['predictions']):
-                    if (existing['symbol'] == prediction['symbol'] and 
-                        existing['target_month'] == prediction['target_month']):
-                        existing_prediction = i
-                        break
-                
-                if existing_prediction is not None:
-                    # Update existing prediction
-                    history['predictions'][existing_prediction] = prediction
-                    print(f"Updated prediction {symbol} next month: ${prediction['predicted_price']:.0f} (+/-{prediction['confidence_band']*100:.0f}%)")
-                else:
-                    # Add new prediction
-                    history['predictions'].append(prediction)
-                    print(f"New prediction {symbol} next month: ${prediction['predicted_price']:.0f} (+/-{prediction['confidence_band']*100:.0f}%)")
+                history['predictions'].append(prediction)
+                print(f"New prediction {symbol} {next_month}: ${prediction['predicted_price']:.0f} (+/-{prediction['confidence_band']*100:.0f}%)")
         
         # Save updated history
         self.save_predictions_history(history)
