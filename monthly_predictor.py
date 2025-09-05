@@ -185,9 +185,9 @@ class MonthlyPredictor:
             sentiment_factor = (features['sentiment_mean'] - 3) * 0.06
             sentiment_momentum = features['sentiment_momentum_7d'] * 0.04
             
-            # Technical factors
+            # Technical factors (with proper scaling)
             rsi_factor = 0 if pd.isna(features['rsi']) else (features['rsi'] - 50) / 1000  # RSI momentum
-            macd_factor = 0 if pd.isna(features['macd']) else features['macd'] * 0.001  # MACD signal
+            macd_factor = 0 if pd.isna(features['macd']) else np.clip(features['macd'] / current_price, -0.05, 0.05)  # MACD as % of price, capped
             bb_factor = 0 if pd.isna(features['bb_position']) else (features['bb_position'] - 0.5) * 0.02  # Bollinger position
             
             # Volume factor
@@ -212,6 +212,10 @@ class MonthlyPredictor:
             )
             
             prediction = base_prediction * (1 + total_factor)
+            
+            # Safety check: ensure prediction is positive and reasonable
+            prediction = max(prediction, base_prediction * 0.5)  # Never predict less than 50% of current price
+            prediction = min(prediction, base_prediction * 2.0)   # Never predict more than 200% of current price
             
             # Dynamic confidence based on volatility
             volatility = abs(features['price_change_7d']) if not pd.isna(features['price_change_7d']) else 0.05
@@ -311,6 +315,11 @@ class MonthlyPredictor:
                 total_factor = sentiment_factor + trend_factor + community_factor + bias_adjustment
                 
                 prediction = base_prediction * (1 + total_factor)
+                
+                # Safety checks: ensure prediction is positive and reasonable
+                prediction = max(prediction, base_prediction * 0.5)  # Never predict less than 50% of current price
+                prediction = min(prediction, base_prediction * 2.0)   # Never predict more than 200% of current price
+                
                 confidence = 0.08 * confidence_multiplier  # Adjust confidence based on past performance
                 
                 return prediction, confidence
